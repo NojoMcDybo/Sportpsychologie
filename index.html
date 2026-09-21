@@ -363,6 +363,11 @@ html.bewegt .tl{opacity:0!important;animation:none!important}
 .opt:hover:not([disabled]){border-color:var(--signal)}
 .opt.ok{border-color:var(--ok);background:rgba(62,207,142,.13)}
 .opt.no{border-color:var(--no);background:rgba(232,99,95,.13)}
+/* Neutral markiert: gewählt, aber noch nicht aufgelöst. Die Farbe kommt erst
+   nach der Nachfrage — sonst beantwortest du „gewusst oder geraten" im Wissen,
+   wie es ausgegangen ist. Deshalb Signalton, nicht grün und nicht rot. */
+.opt.gewaehlt{border-color:var(--signal);background:color-mix(in srgb,var(--signal) 11%,transparent)}
+.opt[disabled]{cursor:default}
 
 /* Tabellen → Karten auf Mobil */
 table{width:100%;border-collapse:collapse}
@@ -522,11 +527,11 @@ th{color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.
    unter dem Finger weg. */
 .q{min-height:var(--q-hoehe,auto)}
 .q.fest{display:flex;flex-direction:column}
-.q.fest .qfuss{margin-top:auto}
-/* Die Konfidenzfrage füllt die feste Höhe nicht aus — sie steht dann mittig
-   statt oben an einem leeren Kasten zu kleben. */
-.q.fest .konfblock{margin:auto 0}
-.q.fest .konfblock p{margin-top:0}
+.q.fest .qfuss,.q.fest .konf-nach{margin-top:auto}
+/* Die Nachfrage sitzt in derselben Zeile, in der sonst der Tastenhinweis steht:
+   so wächst der Kasten nicht, wenn sie erscheint. */
+.konf-nach p{margin:0 0 7px}
+.konf-nach .conf{margin:0}
 #qmess{position:absolute;visibility:hidden;pointer-events:none;top:0;left:-9999px}
 
 /* Was bei einer Antwort erklärt wird: erst was stimmt, dann was nicht. */
@@ -993,14 +998,23 @@ function bewerte(id,korrekt){
   s.last=Date.now();SRS[id]=s;save("spopsy.srs",SRS);
 }
 
-/* 2 · KONFIDENZ (Hypercorrection-Effekt, Metcalfe 2017) */
-const URTEIL={
- "sicher|richtig":["good","Sitzt. Box hoch."],
- "sicher|falsch":["danger","Du warst dir sicher — und lagst daneben. Das ist die teuerste Sorte Lücke: Du wusstest nicht, dass du es nicht weißt. Immerhin bleiben genau diese Fehler nach der Korrektur am besten hängen (Metcalfe 2017). Zurück auf Box 1."],
+/* 2 · KONFIDENZ (Hypercorrection-Effekt, Metcalfe 2017)
+   Gefragt wird nicht mehr vorab, sondern nur noch da, wo die Antwort etwas
+   ändert: richtig und gezögert. Sonst wird die Konfidenz aus der Antwortzeit
+   erschlossen. Das ist schwächer als eine Selbstauskunft — Latenz misst
+   Abrufgeschwindigkeit, nicht Kalibrierung — und die Texte sagen das auch. */
+const URTEIL={                       // erschlossen, nicht gefragt
+ "sicher|richtig":["good","Ohne Zögern getroffen. Box hoch."],
+ "sicher|falsch":["danger","Ohne Zögern danebengegriffen — abgelesen an deiner Antwortzeit, nicht gefragt. Das ist die teuerste Sorte Lücke: Du hast nicht gestockt, also wusstest du nicht, dass du es nicht weißt. Immerhin bleiben genau diese Fehler nach der Korrektur am besten hängen (Metcalfe 2017). Zurück auf Box 1."],
+ "unsicher|falsch":["","Du hast gestockt und lagst daneben. Normale Lücke, kein blinder Fleck. Beleg lesen, zurück auf Box 1."],
  "unsicher|richtig":["lucky","Richtig, aber brüchig. Bleibt im Umlauf."],
- "unsicher|falsch":["","Normale Lücke. Beleg lesen, zurück auf Box 1."],
  "geraten|richtig":["lucky","Geraten und getroffen — zählt nicht. Bleibt auf Box 1."],
  "geraten|falsch":["","Geraten und daneben. Nachlesen."]
+};
+const URTEIL_GEFRAGT={               // selbst angegeben, nur bei richtig + gezögert
+ "sicher":["good","Gezögert, aber gewusst. Box hoch."],
+ "unsicher":["lucky","Richtig, aber brüchig. Bleibt im Umlauf."],
+ "geraten":["lucky","Geraten und getroffen — zählt nicht. Bleibt auf Box 1."]
 };
 
 /* 3 · TRAINER */
@@ -1118,10 +1132,10 @@ function schwachstellenHTML(){
     <table class="weak"><tbody>${top.map(([id,s])=>{const q=QUIZ.find(x=>x.id===id)||{frage:id};
       return `<tr><td data-label="Frage">${esc(q.frage.slice(0,80))}</td>
         <td data-label="Thema">${esc(s.thema)}</td>
-        <td data-label="Bilanz" class="${s.konf?"hot":""}">${s.f}× falsch${s.konf?` · ${s.konf}× selbstsicher`:""}</td></tr>`;}).join("")}
+        <td data-label="Bilanz" class="${s.konf?"hot":""}">${s.f}× falsch${s.konf?` · ${s.konf}× ohne Zögern`:""}</td></tr>`;}).join("")}
     </tbody></table>
-    <p class="small muted" style="margin-bottom:0">Rot = selbstsicher falsch. Das ist deine Prioritätenliste,
-      nicht der Prozentwert.</p></div>`;
+    <p class="small muted" style="margin-bottom:0">Rot = ohne Zögern danebengegriffen, abgelesen an der
+      Antwortzeit. Das ist deine Prioritätenliste, nicht der Prozentwert.</p></div>`;
 }
 
 /* ================= Sitzungsgedächtnis =================
@@ -1164,17 +1178,26 @@ function stapelHoehe(items){
   const kandidaten=[...items]
     .sort((a,b)=>(b.frage+b.optionen.join("")).length-(a.frage+a.optionen.join("")).length)
     .slice(0,3);
+  // Beide Fußvarianten messen: der Tastenhinweis und die Nachfrage teilen sich
+  // denselben Slot, und die Nachfrage ist die höhere. Nur so springt der Kasten
+  // auch dann nicht, wenn sie nach einem Zögern erscheint.
+  const fuesse=[
+    `<p class="small muted qfuss" style="margin-top:8px">Tasten 1–4 · Auflösung erst am Ende</p>`,
+    `<div class="konf-nach"><p class="small muted">Du hast gezögert — gewusst oder geraten?</p>
+       <div class="conf"><button><span class="kbd">1</span>Sicher</button>
+       <button><span class="kbd">2</span>Unsicher</button>
+       <button><span class="kbd">3</span>Geraten</button></div></div>`];
   let max=0;
-  kandidaten.forEach(q=>{
+  kandidaten.forEach(q=>fuesse.forEach(fuss=>{
     // Genau dieselbe Auszeichnung wie in frage() — inklusive .fest. Ohne das
     // misst man Blockfluss (mit kollabierenden Absatzabständen) und rendert
     // Flexspalte (ohne), und die Messung fällt 16 px zu kurz aus.
     mess.innerHTML=`<div class="q fest"><p class="kicker">${esc(q.thema)} · 88 / 88</p>
       <p><strong>${esc(q.frage)}</strong></p>
       ${q.optionen.map((o,j)=>`<button class="opt"><span class="kbd">${j+1}</span>${esc(o)}</button>`).join("")}
-      <p class="small muted qfuss" style="margin-top:8px">Tasten 1–4</p></div>`;
+      ${fuss}</div>`;
     max=Math.max(max, mess.firstElementChild.getBoundingClientRect().height);
-  });
+  }));
   mess.innerHTML="";
   return Math.ceil(max);
 }
@@ -1222,30 +1245,74 @@ function frage(){
     <div class="q fest">
       <p class="kicker">${esc(q.thema)} · ${sess.i+1} / ${sess.items.length}</p>
       <p><strong>${esc(q.frage)}</strong></p>
-      ${!klausur&&!sess.konf?`
-        <div class="konfblock">
-        <p class="small muted">Erst festlegen: Wie sicher bist du?</p>
-        <div class="conf"><button data-konf="sicher">Sicher</button>
-          <button data-konf="unsicher">Unsicher</button><button data-konf="geraten">Geraten</button></div></div>`:`
-        ${q.optionen.map((o,j)=>`<button class="opt" data-j="${j}"><span class="kbd">${j+1}</span>${esc(o)}</button>`).join("")}
-        <p class="small muted qfuss" style="margin-top:8px">Tasten 1–4${klausur?" · Auflösung erst am Ende":""}</p>`}
+      ${q.optionen.map((o,j)=>`<button class="opt" data-j="${j}"><span class="kbd">${j+1}</span>${esc(o)}</button>`).join("")}
+      <p class="small muted qfuss" style="margin-top:8px">Tasten 1–4${klausur?" · Auflösung erst am Ende":""}</p>
     </div>`;
   zurueckKnopf();
-  run.querySelectorAll("[data-konf]").forEach(b=>b.onclick=()=>{sess.konf=b.dataset.konf;frage();});
   run.querySelectorAll(".opt").forEach(b=>b.onclick=()=>antwort(+b.dataset.j));
+  sess.konf=null; sess.tFrage=Date.now();     // ab hier läuft die Uhr für diese Frage
 }
-function antwort(j){
-  const q=sess.items[sess.i], korrekt=j===q.richtig, konf=sess.konf||"—";
-  sess.antworten.push({id:q.id,thema:q.thema,gewaehlt:j,richtig:korrekt,konf});
-  JOURNAL.push({itemId:q.id,thema:q.thema,ts:Date.now(),gewaehlt:j,richtig:korrekt,konf});
+/* Die Schwelle skaliert mit der Länge: eine lange Frage will gelesen werden,
+   bevor Lesen als Zögern durchgeht. Die beiden Konstanten sind geschätzt — das
+   Journal führt jetzt `ms` mit, damit man sie nach zwei Wochen am eigenen
+   Median der richtigen Antworten nachziehen kann. */
+const zoegerGrenze=(q)=>2500+(q.frage+q.optionen.join("")).length*35;
+
+function buchen(j,korrekt,konf,ms,erfragt){
+  const q=sess.items[sess.i];
+  sess.konf=konf;
+  sess.antworten.push({id:q.id,thema:q.thema,gewaehlt:j,richtig:korrekt,konf,ms});
+  JOURNAL.push({itemId:q.id,thema:q.thema,ts:Date.now(),gewaehlt:j,richtig:korrekt,konf,ms,erfragt});
   save("spopsy.journal",JOURNAL.slice(-3000));
   bewerte(q.id,korrekt&&konf!=="geraten");
   LOG.add(1,korrekt); PET.reagiere(korrekt,konf);
-  if(sess.modus==="klausur"){sess.i++;sess.konf=null;return frage();}
+}
+
+/* Die Nachfrage sitzt in der Zeile, in der sonst der Tastenhinweis steht —
+   darum wächst der Kasten nicht, wenn sie erscheint. Sie kommt vor der
+   Farbauflösung: wer schon Grün sieht, beantwortet „gewusst oder geraten"
+   nicht mehr ehrlich. */
+function konfidenzFragen(fertig){
+  const run=document.getElementById("run"), fuss=run.querySelector(".qfuss");
+  if(!fuss) return fertig("unsicher");
+  fuss.outerHTML=`<div class="konf-nach">
+    <p class="small muted">Du hast gezögert — gewusst oder geraten?</p>
+    <div class="conf"><button data-konf="sicher"><span class="kbd">1</span>Sicher</button>
+      <button data-konf="unsicher"><span class="kbd">2</span>Unsicher</button>
+      <button data-konf="geraten"><span class="kbd">3</span>Geraten</button></div></div>`;
+  run.querySelectorAll(".konf-nach [data-konf]").forEach(b=>b.onclick=()=>{
+    const w=b.dataset.konf; run.querySelector(".konf-nach").remove(); fertig(w); });
+}
+
+function antwort(j){
+  const q=sess.items[sess.i], korrekt=j===q.richtig;
+  const ms=Date.now()-(sess.tFrage||Date.now()), schnell=ms<zoegerGrenze(q);
   const run=document.getElementById("run");
+  run.querySelectorAll(".opt").forEach(o=>o.disabled=true);
+  if(sess.modus==="klausur"){
+    buchen(j,korrekt,schnell?"sicher":"unsicher",ms,false);
+    sess.i++; sess.konf=null; return frage();
+  }
+  // Gefragt wird nur, wo die Antwort etwas ändert: richtig und gezögert.
+  // Dort entscheidet gewusst/geraten, ob die Karte hochsteigt. Bei falsch geht
+  // sie ohnehin auf Box 1 zurück — ein Klick, der nichts bewegt, entfällt.
+  if(korrekt&&!schnell){
+    const g=run.querySelector(`.opt[data-j="${j}"]`); if(g)g.classList.add("gewaehlt");
+    konfidenzFragen(w=>{ buchen(j,korrekt,w,ms,true); aufloesen(j,korrekt,w,true); });
+    return;
+  }
+  const w=schnell?"sicher":"unsicher";
+  buchen(j,korrekt,w,ms,false);
+  aufloesen(j,korrekt,w,false);
+}
+
+function aufloesen(j,korrekt,konf,erfragt){
+  const q=sess.items[sess.i], run=document.getElementById("run");
   run.querySelectorAll(".opt").forEach((o,k)=>{
-    if(k===q.richtig)o.classList.add("ok"); else if(k===j)o.classList.add("no"); o.disabled=true;});
-  const [cls,txt]=URTEIL[`${konf}|${korrekt?"richtig":"falsch"}`]||["",""];
+    o.classList.remove("gewaehlt");
+    if(k===q.richtig)o.classList.add("ok"); else if(k===j)o.classList.add("no");});
+  const fuss=run.querySelector(".qfuss"); if(fuss)fuss.remove();   // „Tasten 1–4" ist durch
+  const [cls,txt]=(erfragt?URTEIL_GEFRAGT[konf]:URTEIL[`${konf}|${korrekt?"richtig":"falsch"}`])||["",""];
   // Erst was stimmt, dann was nicht stimmt. Wer danebenlag, braucht zuerst die
   // richtige Antwort begründet — der Ausschluss der anderen hilft ihm erst danach.
   run.querySelector(".q").insertAdjacentHTML("beforeend",`
@@ -1303,8 +1370,9 @@ function finish(){
       .sort((a,b)=>(a[1].r/a[1].n)-(b[1].r/b[1].n))
       .map(([t,v])=>`<tr><td data-label="Modul">${esc(t)}</td><td data-label="Ergebnis">${v.r} / ${v.n} · ${Math.round(100*v.r/v.n)} %</td></tr>`).join("")}</tbody></table>
     <p class="small muted">Nach Trefferquote sortiert — oben steht, was du zuerst anfassen solltest.</p>
-    ${matrix.sf?`<div class="verdict danger"><strong>${matrix.sf}× selbstsicher falsch.</strong>
-      Das ist die eigentliche Auswertung. Alle davon stehen jetzt in Box 1 und kommen morgen wieder.</div>`:""}
+    ${matrix.sf?`<div class="verdict danger"><strong>${matrix.sf}× ohne Zögern daneben.</strong>
+      Schnell geantwortet und falsch gelegen — das ist die eigentliche Auswertung, nicht die Quote.
+      Alle davon stehen jetzt in Box 1 und kommen morgen wieder.</div>`:""}
     <p><button class="chip" onclick="sess=null;save('spopsy.sess',null);zurueckKnopf();render()">Zurück zum Trainer</button></p></div>`;
   sess=null; save("spopsy.sess",null); zurueckKnopf();
 }
@@ -1312,6 +1380,9 @@ document.addEventListener("keydown",e=>{
   if(e.key==="a"||e.key==="A"){if(!/input|textarea/i.test(e.target.tagName))PET.toggle();}
   if(e.key==="s"||e.key==="S"){if(!/input|textarea/i.test(e.target.tagName))PET.idle();}
   if(!sess||!document.getElementById("run")||Layer.auf)return;
+  // Steht die Nachfrage, gehören 1–3 ihr — sonst wählen 1–4 die Option.
+  const kn=document.querySelectorAll(".konf-nach [data-konf]");
+  if(kn.length){ if(e.key>="1"&&e.key<="3"&&kn[+e.key-1])kn[+e.key-1].click(); return; }
   if(e.key>="1"&&e.key<="4"){const b=document.querySelector(`.opt[data-j="${+e.key-1}"]:not([disabled])`);if(b)b.click();}
   if(e.code==="Space"){const n=document.getElementById("next");if(n){e.preventDefault();n.click();}}
 });
@@ -1973,7 +2044,9 @@ addEventListener("resize", ()=>{
     run.style.setProperty("--q-hoehe", sess.hoehe+"px");
     // Neu zeichnen nur, solange die Frage offen ist. Eine schon beantwortete
     // Frage würde sonst samt Begründung verschwinden und ließe sich ein
-    // zweites Mal beantworten.
+    // zweites Mal beantworten — und eine offene Nachfrage hat die Antwort noch
+    // gar nicht gebucht, die ginge beim Neuzeichnen verloren.
+    if(document.querySelector(".konf-nach"))return;
     if(sess.antworten.length<=sess.i && sess.i<sess.items.length) frage();
   },180);
 });
