@@ -1455,12 +1455,18 @@ function blaettern(schritt){
     render(); wLaeuft=false; },190);
 }
 addEventListener("pointerdown",e=>{
+  // Ganz zuoberst und ohne Bedingung: hier ist der Klick des vorigen Wischs
+  // längst gefeuert, also darf die Sperre weg. Stand das weiter unten, blieb
+  // sie nach einem Wisch hängen, sobald man als Nächstes auf den Kopf der
+  // Seite klickte — denn Kopf und Knöpfe steigen vorher aus. Ergebnis: jeder
+  // Chip und der Trainer-Knopf tot, bis die Seite neu geladen wurde.
+  wGeste=false;
   if(wLaeuft||e.button!==0)return;
   if(e.target.closest&&e.target.closest(NICHT_WISCHEN))return;
   const art=e.pointerType||"mouse";
   if(art==="mouse"&&e.target.closest(NUR_RANDWISCH))return;   // im Text darf markiert werden
   wStart={x:e.clientX,y:e.clientY,t:performance.now(),art};
-  wAchse=null; wDx=0; wGeste=false;
+  wAchse=null; wDx=0;
 });
 addEventListener("pointermove",e=>{
   if(!wStart||wLaeuft)return;
@@ -1494,6 +1500,11 @@ addEventListener("pointerup",e=>{
 });
 addEventListener("pointercancel",()=>{ if(wStart&&wAchse==="x")wZurueck();
   wStart=null; wAchse=null; document.documentElement.classList.remove("wischt"); });
+// Zweiter Riegel: am Fenster, also nach allen Handlern am Dokument. Die Sperre
+// gilt damit für genau einen Klick und kann nicht liegenbleiben — auch dann
+// nicht, wenn ein Chip mit der Tastatur ausgelöst wird und gar kein
+// pointerdown kommt.
+addEventListener("click",()=>{ wGeste=false; });
 addEventListener("keydown",e=>{
   if(/input|textarea|select/i.test(e.target.tagName))return;
   if(sess)return;                                    // im Drill haben die Pfeile nichts zu suchen
